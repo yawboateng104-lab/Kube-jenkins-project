@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-green
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: inference
+      version: green
+  template:
+    metadata:
+      labels:
+        app: inference
+        version: green
+    spec:
+      containers:
+      - name: api
+        image: inference-api:1.0
+        ports:
+        - containerPort: 8080
+

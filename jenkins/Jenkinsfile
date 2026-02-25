@@ -1,0 +1,62 @@
+pipeline {
+  agent any
+
+  environment {
+    KUBECTL = "/var/jenkins_home/bin/kubectl"
+  }
+
+  stages {
+
+    stage("Sanity: cluster + workloads") {
+      steps {
+        sh """
+          ${KUBECTL} get pods -n default
+          ${KUBECTL} get svc -n default
+          ${KUBECTL} get ingress -n default
+        """
+      }
+    }
+
+    stage("Smoke test GREEN service") {
+      steps {
+        sh """
+          echo "Testing GREEN directly via K8s service..."
+          ${KUBECTL} run curl-green --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- \
+            curl -s http://inference-svc-green/health | tee /tmp/green.json
+          grep -q '"deploy_color":"green"' /tmp/green.json
+        """
+      }
+    }
+
+    stage("Promote GREEN to production (Blue/Green cutover)") {
+      steps {
+        sh """
+          echo "Promoting GREEN by switching inference-svc-blue selector to version=green"
+          ${KUBECTL} patch svc inference-svc-blue -n default -p '{"spec":{"selector":{"app":"inference","version":"green"}}}'
+          ${KUBECTL} get svc inference-svc-blue -n default -o yaml | sed -n '/selector:/,/ports:/p'
+        """
+      }
+    }
+
+    stage("Smoke test production service (inference-svc-blue)") {
+      steps {
+        sh """
+          echo "Testing PRODUCTION service name now should hit GREEN..."
+          ${KUBECTL} run curl-prod --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- \
+            curl -s http://inference-svc-blue/health | tee /tmp/prod.json
+          grep -q '"deploy_color":"green"' /tmp/prod.json
+        """
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo "Pipeline failed — rolling back production to BLUE"
+      sh """
+        ${KUBECTL} patch svc inference-svc-blue -n default -p '{"spec":{"selector":{"app":"inference","version":"blue"}}}' || true
+        ${KUBECTL} get svc inference-svc-blue -n default -o yaml | sed -n '/selector:/,/ports:/p' || true
+      """
+    }
+  }
+}
